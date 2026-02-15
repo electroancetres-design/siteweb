@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Collection Aviator 🛩️</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<style>
+body{margin:0;background:#0b132b;color:#fff;font-family:Segoe UI,Arial;}
+h1,h2{color:#4cc9f0;margin:5px 0;}
+header{padding:10px;background:#1c2541;text-align:center;}
+#map{height:55vh;width:100%;border-bottom:3px solid #3a86ff;}
+.dashboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;padding:12px;}
+.panel{background:#1b263b;border-radius:12px;padding:12px;box-shadow:0 0 10px #000;}
+input,button{padding:6px;margin:3px;border-radius:6px;border:none;}
+button{background:#3a86ff;color:white;cursor:pointer;}
+button:hover{opacity:.8}
+ul{list-style:none;padding:0}
+li{padding:4px}
+.common{color:#adb5bd}.rare{color:#4dabf7}.legendary{color:gold}
+#scannerStatus{display:flex;align-items:center;gap:8px;font-weight:bold;}
+.dot{width:14px;height:14px;border-radius:50%;background:red;}
+.active{background:lime;animation:pulse 1s infinite;}
+@keyframes pulse{50%{opacity:.4}}
+#infoBox{background:#1c2541;border:2px solid #3a86ff;padding:10px;margin-top:10px;border-radius:8px;display:none;}
+.rotated-plane{transform-origin:center center;}
+</style>
+</head>
+<body>
+
+<header>
+<h1>🛩️Collection Aviator🛩️</h1>
+<p>Collectionne les avions en temps réel</p>
+</header>
+
+<div id="map"></div>
+
+<div class="dashboard">
+
+<div class="panel">
+<h2>👤 Compte joueur</h2>
+<input id="username" placeholder="Pseudo">
+<input id="password" type="password" placeholder="Mot de passe"><br>
+<button onclick="register()">Créer</button>
+<button onclick="login()">Connexion</button>
+<button onclick="logout()">Déconnexion</button>
+<p id="playerInfo">Aucun joueur connecté</p>
+
+<hr>
+
+<h3>🔑 Clé API</h3>
+<label>
+  <input type="radio" name="apiOption" value="auto" checked onchange="toggleApiInput()"> Clé automatique
+</label><br>
+<label>
+  <input type="radio" name="apiOption" value="manual" onchange="toggleApiInput()"> Clé manuelle
+</label><br>
+
+<input id="manualApiKey" type="text" placeholder="Entrez votre clé API" style="display:none; margin-top:5px;"><br>
+<p id="apiMessage" style="font-size:0.9em;color:#adb5bd;margin-top:4px;">
+  Utilisez votre propre clé API si vous en avez une, sinon laissez la clé automatique.
+</p>
+</div>
+
+<div class="panel">
+<h2>📡 Scanner</h2>
+Lat <input id="lat" value="48.85">
+Lon <input id="lon" value="2.35"><br>
+Rayon km <input id="radius" value="80" type="number" min="1" max="200"><br>
+Auto-scan (sec) <input id="interval" value="30"><br>
+<button onclick="toggleAutoScan()">ON / OFF</button>
+
+<div id="scannerStatus">
+<div id="dot" class="dot"></div>
+<span id="statusText">Scanner OFF</span>
+</div>
+
+<br><button onclick="scan()">🔍 Scanner maintenant</button>
+</div>
+
+<div class="panel">
+<h2>✈️ Avions détectés</h2>
+<ul id="live"></ul>
+</div>
+
+<div class="panel">
+<h2>📦 Ma collection</h2>
+<ul id="collection"></ul>
+<p>Total : <span id="count">0</span></p>
+</div>
+
+<div class="panel">
+<h2>🏆 Classement</h2>
+<ul id="scores"></ul>
+</div>
+
+<div class="panel">
+<h2>⚙️ Options</h2>
+<input type="checkbox" id="confirmReset"> Confirmer reset<br>
+<button onclick="resetCollection()">🗑️ Reset collection</button><br><br>
+<button onclick="exportData()">📤 Export</button>
+<input type="file" onchange="importData(this)"><br><br>
+<button onclick="changeMapTheme()">🗺️ Changer thème carte</button><br><br>
+<button onclick="toggleInfo()">ℹ️ Informations</button>
+<button onclick="toggleReportPanel()">⚠️ Signaler un problème</button>
+<div id="infoBox">
+<p>Développé par Toto</p>
+<p>La source API fournie par le site web <a href="https://aviationstack.com" target="_blank">aviationstack.com</a></p>
+</div>
+</div>
+
+<div class="panel">
+<h2>💬 Rejoindre la communauté</h2>
+<button onclick="window.open('https://discord.gg/Z9Pdh6tM')">Rejoindre Discord</button>
+</div>
+
+</div>
+
+<!-- Zone Signaler un problème cachée tout en bas -->
+<div class="panel" id="reportPanel" style="display:none;">
+<h2>⚠️ Signaler un problème</h2>
+<button onclick="reportIssue()">Signaler une erreur ou un problème</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+/* CLÉ API */
+let apiKey = "8a6271ca880495c686cb5a2dbfa2ed55"; // Clé automatique par défaut
+
+function toggleApiInput(){
+    const manualInput = document.getElementById("manualApiKey");
+    const selected = document.querySelector('input[name="apiOption"]:checked').value;
+    if(selected === "manual"){
+        manualInput.style.display = "block";
+        apiKey = manualInput.value || "";
+    } else {
+        manualInput.style.display = "none";
+        apiKey = "8a6271ca880495c686cb5a2dbfa2ed55";
+    }
+}
+
+document.getElementById("manualApiKey").addEventListener("input", function(){
+    apiKey = this.value;
+});
+
+/* MAP */
+let baseLayers={ osm:L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'),
+ dark:L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'),
+ toner:L.tileLayer('https://stamen-tiles.a.ssl.fastly.net/toner/{z}/{x}/{y}.png')};
+let currentLayer='osm';
+const map=L.map('map',{layers:[baseLayers.osm]}).setView([48.85,2.35],6);
+let markers=[]; let scanCircle=null; let antennaMarker=null;
+
+/* USERS */
+const USERS_KEY="users_db"; let users=JSON.parse(localStorage.getItem(USERS_KEY))||{}; let currentUser=null;
+function register(){if(users[username.value])return alert("Pseudo pris");users[username.value]={password:password.value,score:0}; saveUsers();alert("Compte créé");}
+function login(){let u=users[username.value]; if(!u||u.password!==password.value)return alert("Erreur"); currentUser=username.value; playerInfo.textContent="Connecté : "+currentUser;}
+function logout(){currentUser=null; playerInfo.textContent="Aucun joueur connecté";}
+function saveUsers(){localStorage.setItem(USERS_KEY,JSON.stringify(users)); updateScores();}
+
+/* COLLECTION */
+const STORAGE="planes_db"; let db=JSON.parse(localStorage.getItem(STORAGE))||{}; let autoScan=null;
+function rarity(a){if(a>10000)return"legendary"; if(a>6000)return"rare"; return"common";}
+
+/* Cercle + antenne */
+function updateScanZone(){
+ const latv = +lat.value;
+ const lonv = +lon.value;
+ let rad = +radius.value || 80;
+ rad = Math.max(1, Math.min(200, rad));
+ radius.value = rad;
+
+ if(scanCircle) map.removeLayer(scanCircle);
+ scanCircle = L.circle([latv, lonv], {
+   color: 'gray',
+   fillColor: 'gray',
+   fillOpacity: 0.3,
+   radius: rad * 1000
+ }).addTo(map);
+
+ if(antennaMarker) map.removeLayer(antennaMarker);
+ antennaMarker = L.marker([latv, lonv], { title: "Votre position" }).addTo(map);
+}
+lat.addEventListener('change',updateScanZone);
+lon.addEventListener('change',updateScanZone);
+radius.addEventListener('change',updateScanZone);
+
+/* SCAN avec AviationStack */
+async function scan(){
+    updateScanZone();
+    live.innerHTML="Scan...";    
+    markers.forEach(m => map.removeLayer(m)); 
+    markers = [];
+
+    const latv = +lat.value, lonv = +lon.value;
+
+    try{
+        const url = `https://api.aviationstack.com/v1/flights?access_key=${apiKey}&limit=10`;
+
+        const r = await fetch(url);
+        const data = await r.json();
+
+        live.innerHTML = "";
+        if(!data.data || data.data.length === 0){
+            live.innerHTML = "<li>Aucun avion détecté</li>";
+            return;
+        }
+
+        data.data.forEach(flight => {
+            const planeId = flight.flight.iata || flight.flight.icao || "UNKNOWN";
+            const planeName = flight.airline.name || "Inconnu";
+
+            const flightNum = flight.flight.number || "N/A";
+            const dep = flight.departure.iata || "???";
+            const arr = flight.arrival.iata || "???";
+            const latF = flight.latitude ? flight.latitude.toFixed(4) : (latv + (Math.random()-0.5)*1).toFixed(4);
+            const lonF = flight.longitude ? flight.longitude.toFixed(4) : (lonv + (Math.random()-0.5)*1).toFixed(4);
+
+            const li = document.createElement("li");
+            li.className = rarity(Math.floor(Math.random()*12000));
+            li.innerHTML = `
+                ${planeName} (${flightNum}) [${dep}→${arr}] [${latF},${lonF}] 
+                <button onclick='addPlane("${planeId}","${planeName}")'>➕</button>
+                <button onclick='showPlaneInfo(${JSON.stringify(flight)})'>ℹ️ + d'infos</button>
+            `;
+            live.appendChild(li);
+
+            const planeIcon = L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/512/69/69908.png',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16],
+                className: 'rotated-plane'
+            });
+
+            const heading = flight.heading || 0;
+            const planeMarker = L.marker([latF, lonF], {icon: planeIcon}).addTo(map);
+            if(planeMarker._icon){
+                planeMarker._icon.style.transform += ` rotate(${heading}deg)`;
+            }
+
+            markers.push(planeMarker);
+        });
+    } catch(err){
+        console.error(err);
+        live.innerHTML="<li>Erreur API. Vérifiez votre clé ou connexion.</li>";
+    }
+}
+
+/* AUTO-SCAN */
+function toggleAutoScan(){
+    const dot = document.getElementById("dot"), txt = document.getElementById("statusText");
+    if(autoScan){
+        clearInterval(autoScan);
+        autoScan = null;
+        dot.classList.remove("active");
+        txt.textContent = "Scanner OFF";
+    } else {
+        scan();
+        let intervalSec = +interval.value;
+        if(intervalSec < 28) intervalSec = 28;
+        if(intervalSec > 99) intervalSec = 99;
+        interval.value = intervalSec;
+        autoScan = setInterval(scan, intervalSec * 1000);
+        dot.classList.add("active");
+        txt.textContent = `Scanner ON (${intervalSec}s)`;
+    }
+}
+
+/* COLLECTION */
+function addPlane(id,name){if(!currentUser)return alert("Connecte-toi");if(!db[id]){db[id]={name};users[currentUser].score++;saveUsers();save();}}
+function resetCollection(){if(!confirmReset.checked)return;db={};save();}
+function save(){localStorage.setItem(STORAGE,JSON.stringify(db));updateUI();}
+function updateUI(){collection.innerHTML="";Object.values(db).forEach(p=>{collection.innerHTML+=`<li>${p.name}</li>`;});count.textContent=Object.keys(db).length;}
+function exportData(){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(db)]));a.download="collection.json";a.click();}
+function importData(i){const r=new FileReader();r.onload=e=>{db=JSON.parse(e.target.result);save();};r.readAsText(i.files[0]);}
+
+/* SCORES */
+function updateScores(){scores.innerHTML=""; Object.entries(users).sort((a,b)=>b[1].score-b[1].score).forEach(([u,d])=>{scores.innerHTML+=`<li>${u} : ${d.score}</li>`;});}
+
+/* Changer thème carte */
+function changeMapTheme(){
+ map.removeLayer(baseLayers[currentLayer]);
+ if(currentLayer==='osm') currentLayer='dark';
+ else if(currentLayer==='dark') currentLayer='toner';
+ else currentLayer='osm';
+ baseLayers[currentLayer].addTo(map);
+}
+
+/* INFOS */
+function toggleInfo(){
+    const box = document.getElementById("infoBox");
+    box.style.display = box.style.display === "none" ? "block" : "none";
+}
+
+/* FONCTION INFO AVION */
+function showPlaneInfo(flight){
+    const info = `
+        Avion : ${flight.flight.iata || flight.flight.icao || "N/A"}\n
+        Compagnie : ${flight.airline.name || "Inconnue"}\n
+        Numéro vol : ${flight.flight.number || "N/A"}\n
+        Départ : ${flight.departure.iata || "???"} (${flight.departure.airport || ""})\n
+        Arrivée : ${flight.arrival.iata || "???"} (${flight.arrival.airport || ""})\n
+        Altitude : ${flight.altitude || "N/A"} m\n
+        Vitesse : ${flight.speed || "N/A"} km/h\n
+        Distance parcourue : ${flight.distance || "N/A"} km
+    `;
+    alert(info);
+}
+
+/* FONCTION REPORT */
+function reportIssue(){
+    const message = prompt("Décrivez le problème ou l'erreur que vous souhaitez signaler :");
+    if(message && message.trim() !== ""){
+        alert("Merci pour votre signalement :\n" + message);
+    }
+}
+
+/* Toggle affichage zone report */
+function toggleReportPanel(){
+    const panel = document.getElementById("reportPanel");
+    panel.style.display = panel.style.display === "none" ? "block" : "none";
+}
+
+/* INIT */
+updateUI();updateScores();updateScanZone();
+</script>
+</body>
+</html>
